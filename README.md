@@ -23,15 +23,21 @@ Follow the steps below to set up and install the project dependencies.
 
 ### Setup
 
-1. Clone the repository:
+
+1. Navigate to the server directory:
    ```bash
    git clone <repository_url>
-2. Navigate to the project directory:
+2. Install server dependencies:
    ```bash
    cd reviewpulse
-3.Install the required dependencies:
+3. In .env write your MongoDB url
    ```bash
    pip install -r requirements.txt
+4.Run the Streamlit app:
+   ```bash
+   streamlit run app.py
+
+
 
 
 
