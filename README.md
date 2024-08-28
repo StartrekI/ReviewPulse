@@ -37,7 +37,7 @@ Follow the steps below to set up and install the project dependencies.
 
 1. Navigate to the server directory:
    ```bash
-   git clone <repository_url>
+   git clone https://github.com/StartrekI/ReviewPulse
 2. Install server dependencies:
    ```bash
    cd reviewpulse
