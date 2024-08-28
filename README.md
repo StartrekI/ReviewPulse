@@ -26,3 +26,12 @@ Follow the steps below to set up and install the project dependencies.
 1. Clone the repository:
    ```bash
    git clone <repository_url>
+2. Navigate to the project directory:
+      ```bash
+   cd reviewpulse
+3.Install the required dependencies:
+      ```bash
+   pip install -r requirements.txt
+4.Run the Streamlit app:
+      ```bash
+   streamlit run app.py
