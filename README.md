@@ -32,6 +32,7 @@ Follow the steps below to set up and install the project dependencies.
 3.Install the required dependencies:
       ```bash
    pip install -r requirements.txt
+   
 4.Run the Streamlit app:
       ```bash
    streamlit run app.py
