@@ -1,0 +1,432 @@
+================================================================================
+                           REVIEWPULSE — FEATURES GUIDE
+              What every feature means and what insight it gives you
+================================================================================
+
+1. WHAT THE APPLICATION DOES (one paragraph)
+--------------------------------------------------------------------------------
+ReviewPulse takes a Flipkart product URL, scrapes every customer review (up to
+~300 per product, the Flipkart cap), runs nine layers of analysis on the text,
+and shows the result as a premium dashboard. Instead of forcing you to read
+hundreds of reviews to understand a product, it surfaces what people actually
+think about specific features (sound, battery, ANC, mic, build, etc.), groups
+recurring complaints into clusters, tracks how sentiment changed month by month,
+and lets you filter the raw reviews by any combination of dimensions.
+
+
+2. THE PIPELINE — WHAT HAPPENS BEHIND THE SCENES
+--------------------------------------------------------------------------------
+When you paste a URL and hit Analyze, five stages run in order. The loader UI
+shows each stage as it executes.
+
+  Stage 1 — Scrape
+    Pulls every review page from Flipkart using Chrome TLS impersonation
+    (curl_cffi) to bypass anti-bot blocks. Reviews come from a hidden JSON
+    state on the page (window.__INITIAL_STATE__), not from CSS selectors —
+    that makes the scraper robust to Flipkart redesigns. Captures author,
+    rating, title, full comment text, date, helpful count, verified flag,
+    city, and state.
+
+  Stage 2 — Enrich + sentiment
+    For every review: computes VADER sentiment (compound score from −1 to +1),
+    classifies it as positive / neutral / negative, parses the date (handles
+    both "Feb, 2024" and "10 months ago" formats), counts words and
+    characters, detects emojis, detects multiline structure, detects
+    feature-breakdown patterns ("Sound: 9/10\nBattery: 10/10"), flags
+    rating-vs-sentiment mismatches, and flags reviews that talk mostly
+    about delivery/returns instead of the product.
+
+  Stage 3 — Aspect analysis (ABSA)
+    Splits each review into sentences. For every sentence, checks whether
+    it mentions one of nine product aspects (Sound, ANC, Battery, Mic,
+    Comfort, Connectivity, Build, Controls, Value). Each aspect-mentioning
+    sentence gets its own sentiment score. The system aggregates per
+    aspect: how many reviews mentioned it, how many sentences were
+    positive vs negative, and which aspects are "polarizing" (high mix
+    of positive AND negative). This is what powers the radar chart and
+    the per-aspect bars.
+
+  Stage 4 — Cluster complaints
+    Collects only the negative-leaning sentences (from low-rated reviews
+    or from negatively-toned sentences in any review). Vectorizes them
+    with TF-IDF (1-grams and 2-grams), then runs KMeans (k=5) to group
+    similar complaints together. Each resulting cluster gets a label
+    from its top distinguishing terms, an exemplar quote, the average
+    rating of the source reviews, and a list of review IDs. This is
+    what brands pay $$$ for: discovering recurring defect signatures.
+
+  Stage 5 — Timeseries + Geo + Pros/Cons
+    Buckets reviews by month for the timeline chart. Computes per-state
+    aggregates for the geography chart. Mines pros and cons by splitting
+    reviews on contrastive conjunctions ("but", "however", "although") —
+    in a 4★/5★ review, the part AFTER "but" is typically a complaint;
+    in a 1★/2★ review it is typically the redeeming feature.
+
+
+3. THE THREE UI STATES
+--------------------------------------------------------------------------------
+
+  HERO STATE
+    What you see first. Centered title, single accent gradient backdrop,
+    a search bar with a URL prefix tag, page-count selector, and four
+    micro-stats (9 aspects, 5 clusters, 25 months, 300 reviews). The
+    purpose is clarity: paste URL, choose how many pages to scrape,
+    click Analyze.
+
+  LOADER STATE
+    A shimmer bar plus five pipeline steps. Each step lights up
+    (active = pulsing dot) then completes (green checkmark) as the
+    backend works through it. Communicates progress without spinning
+    forever — you can see exactly which stage is running.
+
+  DASHBOARD STATE
+    Two-column layout: 220px sidebar nav on the left, main bento-grid
+    content area on the right. The sidebar has scroll-spy: as you scroll,
+    the active section is highlighted automatically. A "New analysis"
+    button at the bottom of the sidebar takes you back to the hero.
+
+
+4. SECTION-BY-SECTION FEATURE GUIDE
+--------------------------------------------------------------------------------
+
+================================================================================
+SECTION: OVERVIEW
+================================================================================
+The top-level snapshot. What you should look at before drilling in.
+
+  KPI #1 — Reviews
+    The total number of reviews scraped (max 300 — Flipkart's hard limit).
+    Footer shows what % were verified buyers.
+
+  KPI #2 — Avg rating
+    Mean of all star ratings. The footer shows what % gave 5 stars.
+    A high average with most reviews at 5★ is a positive review skew —
+    common on Flipkart and useful to know before trusting the number.
+
+  KPI #3 — Positive %
+    What fraction of reviews have positive VADER sentiment (compound > 0.1).
+    This is text-based, not star-based. A 5★ review with negative content
+    counts as negative here. So this number can disagree with the rating
+    average — that's a signal, not a bug.
+
+  KPI #4 — Negative %
+    The mirror of KPI #3 — fraction with compound < −0.1. The most
+    important number for spotting hidden product problems.
+
+  KPI #5 — Verified %
+    What fraction were confirmed Flipkart purchases. Flipkart already
+    filters most spam, so on this platform it's typically 100%, but
+    if it drops, trust the data less.
+
+  KPI #6 — Mismatches (rating ↔ tone)
+    The count of reviews where the star rating disagrees with the text
+    sentiment. Two patterns to watch for:
+      • 5★ but negative text → could be sarcasm, or could be someone
+        who liked the product but is complaining about delivery.
+      • 1★ but positive text → could be a polite complainer who
+        described the issue calmly. These are usually high-quality
+        critical reviews — worth reading.
+    A high mismatch count means VADER is being fooled OR people are
+    expressing complaints in unexpected ways.
+
+  CHART — Sentiment over time (8 cols)
+    Line chart spanning every month with reviews. Two lines:
+      • Solid line = average rating per month (left axis, 1–5 scale)
+      • Dashed line = average sentiment per month (right axis, −1 to +1)
+    Watch for: divergence between the two lines (rating stays high
+    but sentiment drops = something is wrong but stars don't show it),
+    sudden volume spikes (a sale or a quality event), gradual
+    deterioration (early adopters loved it, later buyers don't).
+
+  CHART — Ratings (4 cols)
+    Horizontal bar chart of how many reviews gave each star rating.
+    Color-coded green (5/4) → yellow (3) → red (2/1). Tells you the
+    shape of the distribution at a glance — heavy 5★ skew vs U-shaped
+    polarization.
+
+
+================================================================================
+SECTION: ASPECTS — the headline analytical feature
+================================================================================
+Star ratings tell you "people like this product overall." Aspect-Based
+Sentiment Analysis tells you "people love the sound BUT think the mic is
+weak." That second insight is what makes review intelligence valuable.
+
+The nine aspects analyzed:
+
+  • Sound          — Audio quality, bass, treble, clarity, volume
+  • ANC            — Active noise cancellation effectiveness
+  • Battery        — Playback time, charging, drainage
+  • Mic            — Call quality, microphone clarity
+  • Comfort        — Fit, ear-tip pressure, headache complaints
+  • Connectivity   — Bluetooth pairing, multipoint, lag, latency
+  • Build          — Design, case, materials, durability
+  • Controls       — Touch, taps, gestures, buttons
+  • Value          — Price, money, worth, expensive/cheap
+
+  CHART — Aspect ratings (radar/spider, 5 cols)
+    Each axis is one of the nine aspects. The shape of the polygon
+    reveals the product's strengths and weaknesses: a balanced
+    pentagon = consistently good; a sharp dent on one axis = a known
+    weak point; a stretched corner = a standout strength.
+
+  CHART — Per-aspect breakdown (bars, 7 cols)
+    For each aspect, a horizontal stacked bar showing the SENTENCE-LEVEL
+    sentiment split (positive / neutral / negative). On the right:
+    the average star rating of reviews mentioning that aspect, plus
+    the mention count. This is denser than the spider — it tells you
+    not just "ANC is 4.36★" but "of 91 ANC sentences, 61 are positive,
+    20 neutral, 10 negative."
+
+    Polarizing tag: an aspect gets a "POLARIZING" badge if at least
+    30% of its sentences are positive AND at least 20% are negative.
+    These are the divisive features — same product, opposite
+    experiences. Worth digging into.
+
+
+================================================================================
+SECTION: THEMES — what people praise and complain about
+================================================================================
+
+  CHIP CLOUD — Pros (6 cols, green chips)
+    Auto-extracted phrases that appear on the POSITIVE side of "but"
+    splits, plus phrases from highly-rated reviews. Each chip shows the
+    phrase and how many reviews used it. These are what customers
+    actually love, in their own words.
+
+  CHIP CLOUD — Cons (6 cols, red chips)
+    Same logic, mirrored — phrases from the NEGATIVE side of "but"
+    splits and from low-rated reviews. If the same phrase appears in
+    both pros and cons, that's correctly captured polarization (some
+    people love what others hate).
+
+  COMPLAINT CLUSTERS (full-width grid of cards)
+    The most actionable feature in the entire dashboard. Each card
+    represents a recurring negative theme that the algorithm
+    discovered on its own (no hand-coded rules).
+
+    Card contents:
+      • Label — the top distinguishing terms for the cluster
+      • Avg rating — average star rating of source reviews (always
+        low, since these are negative-leaning)
+      • Exemplar quote — the most representative actual review
+        sentence in the cluster
+      • Footer — total reviews and total sentences in the cluster
+
+    What to read for: defects ("battery drains fast"), service
+    issues ("open-box delivery damaged"), feature gaps ("no
+    multipoint switching"), comfort problems ("hurts after an hour").
+    Each cluster typically maps to one specific real-world issue.
+
+
+================================================================================
+SECTION: GEOGRAPHY
+================================================================================
+Where the reviews come from, and how location affects sentiment.
+
+  CHART — By state (horizontal bars, 7 cols)
+    States ranked by review count (top 12 shown). Each bar's length is
+    the average rating, color-coded green (≥4.5) → yellow (≥3.5) → red.
+    Hover shows count and exact rating. What this surfaces: regional
+    sentiment differences. If one state's average is significantly
+    lower, it might indicate a regional logistics problem, fake-review
+    farms, or product compatibility issues with local conditions.
+
+  RANK LIST — Cities (5 cols)
+    Top 10 cities by review count, mono-formatted with rank numbers.
+    Useful for understanding the product's geographic concentration.
+
+
+================================================================================
+SECTION: TIMELINE
+================================================================================
+
+  CHART — Monthly review activity (full width, stacked bars)
+    Each bar is one month. Three stacked segments per bar:
+      • Green = positive reviews
+      • Gray = neutral
+      • Red = negative
+    Bar height = total review volume that month. Watch for: review
+    volume spikes (a sale event or viral mention), growing red
+    segments over time (quality declining), or a sudden shift in
+    the green:red ratio (something changed about the product).
+
+    Note: the dates were rescued from Flipkart's mixed format —
+    "Feb, 2024" reviews and "10 months ago" reviews are both
+    plotted on the same axis using the timeline parser.
+
+
+================================================================================
+SECTION: REVIEWS — filterable raw data
+================================================================================
+Where you go to read actual customer text after the dashboards have
+told you what to look for.
+
+  FILTER BAR
+    • Rating filter   — show only 1★ / 2★ / 3★ / 4★ / 5★
+    • Sentiment filter — show only positive / neutral / negative
+    • Aspect filter    — show only reviews mentioning sound, ANC, etc.
+    • Length filter    — short (<20 chars) / medium (20–200) / long (200+)
+    • Search box       — keyword search in author + title + comment
+    • Filter count     — live tally of matches
+
+    Filters are pre-computed inverted indexes in the JSON: the JS
+    intersects ID lists at O(1) per filter, so combining multiple
+    filters is instant even on large datasets.
+
+  REVIEW CARDS (sorted by helpful count, top 50 shown)
+    Each card shows:
+      • Avatar (initials), author name, location, date
+      • Stars (mono-formatted, dots for missing stars)
+      • Sentiment chip (POS / NEU / NEG, color-coded)
+      • Title (the canned Flipkart phrase or custom title)
+      • Full comment text (preserves newlines, wraps long lines)
+      • Footer flags:
+          – 👍 N         = helpful vote count
+          – Nw           = word count
+          – aspect tags  = which aspects this review mentions
+          – ⚠ mismatch  = star rating disagrees with text sentiment
+          – 📦 logistics = review centers on delivery/returns
+
+
+5. SPECIAL FLAGS — WHAT THEY MEAN AND WHY THEY MATTER
+--------------------------------------------------------------------------------
+
+  MISMATCH (⚠)
+    The star rating disagrees with the text sentiment. Two cases:
+      • 4★ or 5★ rating with negative text → user gave a high rating
+        out of habit but the text reveals a problem. Frequently
+        these are Flipkart's canned title issue (titled "Just wow!"
+        but content says "Worst delivery service").
+      • 1★ or 2★ rating with positive text → user is a polite
+        complainer. These are usually the highest-quality critical
+        reviews because the person took time to explain calmly.
+
+  LOGISTICS (📦)
+    The review text mentions delivery, return, refund, warranty,
+    open-box, courier, or shipping. This separates supply-chain
+    pain from product pain. A product with 30% logistics-flagged
+    reviews has a fulfillment issue, not a product issue.
+
+  POLARIZING (aspect badge)
+    An aspect where users sharply disagree — at least 30% positive
+    and at least 20% negative sentences. These features are
+    inconsistent across the user base. ANC is often polarizing on
+    earbuds because effectiveness depends on ear-tip fit.
+
+  ANONYMOUS
+    Reviews from users displaying as "Flipkart Customer" rather
+    than a real name. Typically ~12% of any product's reviews.
+    Not necessarily fake, but worth noting.
+
+  HAS_FEATURE_BREAKDOWN
+    Reviews that contain mini-ratings like "Sound: 9/10\nBattery: 10/10".
+    These are the most engaged reviews. The 476-helpful exemplar in
+    the OnePlus Buds 3 dataset uses this format — readers reward
+    structured criticism with helpful votes.
+
+
+6. WHAT TO LOOK FOR — SAMPLE INSIGHT WORKFLOW
+--------------------------------------------------------------------------------
+A typical session for a buying decision:
+
+  1) OVERVIEW: Is the avg rating real or inflated by 5★ skew? Check
+     the rating chart — if 70%+ are 5★, the average is misleading.
+     Also check the mismatch count — if it's >5%, the average rating
+     is hiding text-based dissatisfaction.
+
+  2) ASPECTS: Look at the spider chart for the weakest axis. That
+     is the product's known weakness. Then confirm in the per-aspect
+     bars: how many sentences are negative vs positive on that axis?
+
+  3) THEMES → CLUSTERS: Read the exemplar quote on each cluster.
+     These are the recurring complaints. If a cluster maps to
+     something you care about (battery, mic, ANC), drill in.
+
+  4) THEMES → CONS: The chip cloud surfaces the top complaint
+     phrases. Compare with the cluster labels — they should
+     overlap and reinforce each other.
+
+  5) TIMELINE: Has sentiment changed over time? A product that
+     was 4.7★ in 2024 but 4.0★ in 2026 is degrading.
+
+  6) REVIEWS: Filter to your specific concern (e.g., aspect = mic,
+     sentiment = negative). Read the top-helpful matching reviews.
+     These are the most-validated specific complaints.
+
+
+7. THE DATA SCHEMA (v2.0) — WHAT GETS STORED
+--------------------------------------------------------------------------------
+The /analyze endpoint returns a JSON with nine top-level sections:
+
+  meta        — schema version, scrape time, review count, product URL
+  aggregates  — totals: rating distribution, sentiment counts, top cities,
+                top states, length buckets, mismatch count, etc.
+  aspects     — per-aspect ABSA: rating, mentions, pos/neu/neg sentence
+                counts, polarizing flag, list of source review IDs
+  summary     — pros and cons (heuristic phrase mining)
+  clusters    — complaint clusters (label, exemplar, size, avg rating, IDs)
+  timeseries  — monthly buckets (month, n, avg rating, avg sentiment,
+                positive count, negative count)
+  geo         — per-state aggregates (count, avg rating, sentiment split)
+  filters     — inverted indexes by_rating, by_sentiment, by_aspect,
+                by_cluster, by_city, by_state, by_year, by_length_bucket,
+                with_emoji, multiline, anonymous, mismatch, logistics
+  reviews     — every review keyed by UUID, fully enriched with author,
+                rating, title (text + category), comment (text + 8
+                computed flags), date (raw + iso + days_ago + format),
+                engagement (helpful_count), analysis (sentiment_score,
+                sentiment_label, mismatch flag), aspect_mentions
+                (per-sentence aspect hits), aspects_present (set of
+                aspects this review mentions)
+
+
+8. WHAT MAKES THE DESIGN PREMIUM
+--------------------------------------------------------------------------------
+Compared to a typical free dashboard template, the visual design follows
+five rules borrowed from products like Linear, Vercel, and Stripe:
+
+  • One accent color only (Linear indigo #5E6AD2). No rainbow palettes.
+  • Numbers are in JetBrains Mono with tabular-nums so digits don't
+    jiggle when values update. This single choice moves a dashboard
+    up two tiers in perceived quality.
+  • Cards use 1px borders, no drop shadows. Shadows feel cheap.
+  • Bento grid (asymmetric column spans of 2/4/5/6/7/8/12) instead of
+    uniform 4×N grids. Creates visual rhythm.
+  • 8px card radius, 6px buttons, 4px inputs — consistent ratio.
+  • Charts: no vertical gridlines, horizontal at 4% opacity, 2px line
+    strokes, gradient area fills 16%→0%, mono tooltips with dark bg.
+  • 150ms ease transitions only. No bouncing, no 300ms eases.
+  • Skeleton shimmer instead of spinners.
+
+
+9. WHAT IS NOT YET IMPLEMENTED (Phase 3+)
+--------------------------------------------------------------------------------
+The following features are scoped in DESIGN_PROPOSAL.md but not yet built:
+
+  • LLM TL;DR with grounded citations (Amazon "Customers say..." clone)
+  • Adjusted rating after filtering low-quality reviews (Fakespot-style)
+  • Ask-your-reviews chat (Birdeye Athena clone)
+  • Competitor mention graph
+  • Use-case persona segmentation
+  • India choropleth map (instead of bar chart)
+  • Engaged 5★ vs drive-by 5★ split
+  • Reviewer authenticity heatmap with burst detection
+  • Hinglish / language detection
+  • Photo/video review detection (requires scraper enhancement)
+
+
+10. FILES IN THE PROJECT
+--------------------------------------------------------------------------------
+  app.py                    — original Streamlit app (v1, kept for reference)
+  scrape_all_reviews.py     — Flipkart scraper (curl_cffi + JSON state extraction)
+  export_json.py            — pipeline orchestrator producing schema v2.0
+  analysis_v2.py            — Phase 1 analysis: dates, ABSA, pros/cons, clusters
+  web_app.py                — Flask server with /analyze endpoint
+  templates/index.html      — three-state UI (hero / loader / dashboard)
+  static/style.css          — Linear-token premium dark theme
+  static/app.js             — Chart.js + filter logic + render orchestration
+  flipkart_reviews.csv      — last raw scrape (300 OnePlus Buds 3 reviews)
+  reviews_analysis.json     — last enriched output (v2.0 schema)
+  DESIGN_PROPOSAL.md        — research-backed roadmap from three agents
+  FEATURES.txt              — this file

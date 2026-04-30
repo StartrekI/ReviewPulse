@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+
+# OS
+.DS_Store
+.AppleDouble
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.claude/
+
+# Generated outputs (regenerated on demand)
+flipkart_reviews.csv
+reviews_analysis.json
+
+# Logs / runtime
+*.log
+*.pid
